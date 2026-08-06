@@ -31,26 +31,8 @@ st.markdown(
 with st.sidebar:
     st.title("🛠️ 업무 자동화 도구")
     st.radio("메뉴 선택", ["📊 매출 자동 매칭"], index=0)
-
     st.divider()
     st.caption(f"v{APP_VERSION} · 정상금액 기준")
-
-    st.markdown("---")
-    st.markdown(
-        """
-        <div style="
-            text-align: center;
-            color: #98A2B3;
-            font-size: 12px;
-            line-height: 1.7;
-            padding: 6px 0 12px 0;
-        ">
-            © 2026 MIN JEE-WON<br>
-            MOOAS Sales Automation
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
 st.markdown('<div class="title">📊 스룩 매출 자동 매칭</div>', unsafe_allow_html=True)
 st.markdown(
@@ -141,3 +123,4 @@ st.download_button(
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     use_container_width=True,
     key=f"download_{signature}",
+)
