@@ -124,3 +124,17 @@ st.download_button(
     use_container_width=True,
     key=f"download_{signature}",
 )
+st.markdown("---")
+st.markdown(
+    """
+    <div style="
+        text-align: center;
+        color: #98A2B3;
+        font-size: 13px;
+        padding: 12px 0 24px 0;
+    ">
+        © 2026 Developed by MINJEEWON | MOOAS Sales Automation
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
