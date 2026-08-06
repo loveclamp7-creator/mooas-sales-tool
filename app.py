@@ -83,10 +83,7 @@ with st.sidebar:
 # -----------------------------
 # 메인 화면
 # -----------------------------
-st.markdown(
-    '<div class="title">📊 스룩 매출 자동 매칭</div>',
-    unsafe_allow_html=True,
-)
+st.title("📊 스룩 매출 자동 매칭")
 
 st.markdown(
     """
