@@ -258,11 +258,15 @@ def date_score(start: datetime | None, sale: SalesRow) -> float:
     return max(-20.0, 10.0 - days * 3.0)
 
 
-def parse_sales_file(file_bytes: bytes, file_name: str) -> list[SalesRow]:
+def parse_sales_file(
+    file_bytes: bytes,
+    file_name: str,
+    amount_column: str = "정상금액",
+) -> list[SalesRow]:
     raw, header_row = find_sheet_and_header(
         file_bytes,
         file_name,
-        ["상품코드", "상품명", "정상금액"],
+        ["상품코드", "상품명", amount_column],
     )
     headers = [clean_text(value) or f"빈열_{index}" for index, value in enumerate(raw.iloc[header_row].tolist())]
     df = raw.iloc[header_row + 1 :].copy()
@@ -273,7 +277,7 @@ def parse_sales_file(file_bytes: bytes, file_name: str) -> list[SalesRow]:
     name_col = find_column(df, "상품명")
     registered_col = find_column(df, "상품등록일")
     recent_col = find_column(df, "최근주문일")
-    amount_col = find_column(df, "정상금액")
+    amount_col = find_column(df, amount_column)
 
     rows: list[SalesRow] = []
     for source_index, (_, row) in enumerate(df.iterrows()):
@@ -483,7 +487,12 @@ def merge_sales(entry_df: pd.DataFrame, sales_rows: list[SalesRow]):
     return main_df, unmatched_df, log_df
 
 
-def export_result(main_df: pd.DataFrame, unmatched_df: pd.DataFrame, log_df: pd.DataFrame) -> bytes:
+def export_result(
+    main_df: pd.DataFrame,
+    unmatched_df: pd.DataFrame,
+    log_df: pd.DataFrame,
+    amount_column: str,
+) -> bytes:
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter", datetime_format="yyyy-mm-dd hh:mm") as writer:
         main_df.to_excel(writer, index=False, sheet_name="6월매출기재용")
@@ -539,7 +548,7 @@ def export_result(main_df: pd.DataFrame, unmatched_df: pd.DataFrame, log_df: pd.
             unmatched.conditional_format(1, 0, len(unmatched_df), len(unmatched_df.columns) - 1, {"type": "formula", "criteria": '=$A2="셀러 미표기/자사상품"', "format": workbook.add_format({"bg_color": "#E7E6E6"})})
 
         log = writer.sheets["매칭내역"]
-        log.merge_range("A1:K1", "6월 매출 자동 매칭 결과", workbook.add_format({"bold": True, "font_color": "#FFFFFF", "bg_color": "#203864", "font_size": 16, "align": "center", "valign": "vcenter"}))
+        log.merge_range("A1:K1", f"{amount_column} 기준 매출 자동 매칭 결과", workbook.add_format({"bold": True, "font_color": "#FFFFFF", "bg_color": "#203864", "font_size": 16, "align": "center", "valign": "vcenter"}))
         labels = ["기재용 행 수", "매출 입력 행", "매출 미확인", "스룩만 있음", "입력 매출 합계"]
         formulas = [
             f"=COUNTA('6월매출기재용'!A2:A{len(main_df)+1})",
@@ -565,16 +574,22 @@ def export_result(main_df: pd.DataFrame, unmatched_df: pd.DataFrame, log_df: pd.
     return output.getvalue()
 
 
-def process_files(sales_bytes: bytes, sales_name: str, entry_bytes: bytes, entry_name: str):
+def process_files(
+    sales_bytes: bytes,
+    sales_name: str,
+    entry_bytes: bytes,
+    entry_name: str,
+    amount_column: str = "정상금액",
+):
     try:
-        sales_rows = parse_sales_file(sales_bytes, sales_name)
+        sales_rows = parse_sales_file(sales_bytes, sales_name, amount_column)
         entry_df = parse_entry_file(entry_bytes, entry_name)
     except ValueError as first_error:
         try:
-            sales_rows = parse_sales_file(entry_bytes, entry_name)
+            sales_rows = parse_sales_file(entry_bytes, entry_name, amount_column)
             entry_df = parse_entry_file(sales_bytes, sales_name)
         except ValueError:
             raise first_error
     main_df, unmatched_df, log_df = merge_sales(entry_df, sales_rows)
-    excel_bytes = export_result(main_df, unmatched_df, log_df)
+    excel_bytes = export_result(main_df, unmatched_df, log_df, amount_column)
     return main_df, unmatched_df, log_df, excel_bytes
