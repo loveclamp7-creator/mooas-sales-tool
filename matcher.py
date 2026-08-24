@@ -49,19 +49,53 @@ def find_header_row(raw: pd.DataFrame, required: list[str], max_rows: int = 60) 
     raise ValueError("필수 제목 행을 찾지 못했습니다: " + ", ".join(required))
 
 
-def read_first_sheet(file_bytes: bytes, file_name: str, header: int | None = 0) -> pd.DataFrame:
+def read_sheets(file_bytes: bytes, file_name: str, header: int | None = 0) -> list[pd.DataFrame]:
     suffix = Path(file_name).suffix.lower()
     if suffix in {".xlsx", ".xls"}:
-        return pd.read_excel(io.BytesIO(file_bytes), sheet_name=0, header=header, dtype=object)
+        sheets = pd.read_excel(
+            io.BytesIO(file_bytes),
+            sheet_name=None,
+            header=header,
+            dtype=object,
+        )
+        return list(sheets.values())
     if suffix == ".csv":
         for encoding in ("utf-8-sig", "cp949", "euc-kr", "utf-8"):
             try:
                 text = file_bytes.decode(encoding)
-                return pd.read_csv(io.StringIO(text), header=header, dtype=object, sep=None, engine="python")
+                return [
+                    pd.read_csv(
+                        io.StringIO(text),
+                        header=header,
+                        dtype=object,
+                        sep=None,
+                        engine="python",
+                    )
+                ]
             except UnicodeDecodeError:
                 continue
         raise ValueError("CSV 문자 인코딩을 확인하지 못했습니다.")
     raise ValueError("XLSX, XLS, CSV 파일만 사용할 수 있습니다.")
+
+
+def find_sheet_and_header(
+    file_bytes: bytes,
+    file_name: str,
+    required: list[str],
+) -> tuple[pd.DataFrame, int]:
+    errors = []
+    for sheet_number, raw in enumerate(
+        read_sheets(file_bytes, file_name, header=None),
+        start=1,
+    ):
+        try:
+            return raw, find_header_row(raw, required)
+        except ValueError as error:
+            errors.append(f"{sheet_number}번째 시트: {error}")
+    raise ValueError(
+        "모든 시트를 확인했지만 필수 제목 행을 찾지 못했습니다: "
+        + ", ".join(required)
+    )
 
 
 def find_column(df: pd.DataFrame, target: str) -> str:
@@ -225,8 +259,11 @@ def date_score(start: datetime | None, sale: SalesRow) -> float:
 
 
 def parse_sales_file(file_bytes: bytes, file_name: str) -> list[SalesRow]:
-    raw = read_first_sheet(file_bytes, file_name, header=None)
-    header_row = find_header_row(raw, ["상품코드", "상품명", "정상금액"])
+    raw, header_row = find_sheet_and_header(
+        file_bytes,
+        file_name,
+        ["상품코드", "상품명", "정상금액"],
+    )
     headers = [clean_text(value) or f"빈열_{index}" for index, value in enumerate(raw.iloc[header_row].tolist())]
     df = raw.iloc[header_row + 1 :].copy()
     df.columns = headers
@@ -264,7 +301,18 @@ def parse_sales_file(file_bytes: bytes, file_name: str) -> list[SalesRow]:
 
 
 def parse_entry_file(file_bytes: bytes, file_name: str) -> pd.DataFrame:
-    raw = read_first_sheet(file_bytes, file_name, header=0)
+    raw, header_row = find_sheet_and_header(
+        file_bytes,
+        file_name,
+        ["년", "월", "진행일", "밴더사", "셀러", "품목", "판매금액"],
+    )
+    headers = [
+        clean_text(value) or f"빈열_{index}"
+        for index, value in enumerate(raw.iloc[header_row].tolist())
+    ]
+    raw = raw.iloc[header_row + 1 :].copy()
+    raw.columns = headers
+    raw = raw.dropna(how="all")
     renamed = {}
     for target in ENTRY_REQUIRED:
         renamed[find_column(raw, target)] = target
@@ -518,8 +566,15 @@ def export_result(main_df: pd.DataFrame, unmatched_df: pd.DataFrame, log_df: pd.
 
 
 def process_files(sales_bytes: bytes, sales_name: str, entry_bytes: bytes, entry_name: str):
-    sales_rows = parse_sales_file(sales_bytes, sales_name)
-    entry_df = parse_entry_file(entry_bytes, entry_name)
+    try:
+        sales_rows = parse_sales_file(sales_bytes, sales_name)
+        entry_df = parse_entry_file(entry_bytes, entry_name)
+    except ValueError as first_error:
+        try:
+            sales_rows = parse_sales_file(entry_bytes, entry_name)
+            entry_df = parse_entry_file(sales_bytes, sales_name)
+        except ValueError:
+            raise first_error
     main_df, unmatched_df, log_df = merge_sales(entry_df, sales_rows)
     excel_bytes = export_result(main_df, unmatched_df, log_df)
     return main_df, unmatched_df, log_df, excel_bytes
