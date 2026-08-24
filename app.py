@@ -4,10 +4,11 @@ import hashlib
 
 import streamlit as st
 
+from example_files import FINAL_EXAMPLE_BYTES, INTERMEDIATE_EXAMPLE_BYTES
 from matcher import process_files
 
 
-APP_VERSION = "3.1.0"
+APP_VERSION = "4.0.0"
 
 st.set_page_config(
     page_title="공동구매 매출 자동 매칭",
@@ -59,7 +60,7 @@ with st.sidebar:
 
     st.divider()
 
-    st.caption(f"v{APP_VERSION} · 정상금액 기준")
+    st.caption(f"v{APP_VERSION} · 결제금액/정상금액 선택")
 
     st.markdown("---")
 
@@ -95,8 +96,30 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+mode = st.radio(
+    "매출 관리 기준",
+    [
+        "중간 매출 관리 (결제금액 기준)",
+        "최종 매출 관리 (정상금액 기준)",
+    ],
+    horizontal=True,
+)
+
+is_intermediate = mode.startswith("중간")
+amount_column = "결제금액" if is_intermediate else "정상금액"
+example_bytes = (
+    INTERMEDIATE_EXAMPLE_BYTES
+    if is_intermediate
+    else FINAL_EXAMPLE_BYTES
+)
+example_name = (
+    "중간 매출 관리 (결제금액기준) 예시파일.xlsx"
+    if is_intermediate
+    else "최종 매출 관리 (정상금액기준) 예시파일.xlsx"
+)
+
 st.info(
-    "파일 순서와 시트 순서를 자동으로 확인합니다. "
+    f"현재 선택: {mode}\n\n"
     "완전 일치·상품명 축약은 자동 입력하고, "
     "셀러명이 비슷하지만 다른 경우에는 원본 행을 위에 둔 채 "
     "후보 행을 아래에 따로 추가합니다. "
@@ -111,13 +134,37 @@ left, right = st.columns(2)
 
 with left:
     sales_file = st.file_uploader(
-        "① 스룩 상품별 매출 파일",
+        f"① {mode} 원본 파일",
         type=["xlsx", "xls", "csv"],
         help=(
             "상품코드·상품명·상품등록일·최근주문일·"
-            "정상금액 열이 있는 파일"
+            f"{amount_column} 열이 있는 파일"
         ),
-        key="sales_file",
+        key=f"sales_file_{amount_column}",
+    )
+
+    if is_intermediate:
+        st.caption(
+            "스룩 > 매출/정산 > 상품별매출관리 > "
+            "기간설정 검색 > 엑셀 내려받기 후 파일을 첨부하세요."
+        )
+    else:
+        st.caption(
+            "스룩 > 매출/정산 > 상품별매출관리 > "
+            "기간설정 검색 > 아래 내용을 긁어서 엑셀 새 파일에 "
+            "붙여넣은 후 첨부하세요. 상단 내용도 보이게 붙여넣어 주세요!"
+        )
+
+    st.download_button(
+        f"📎 {mode} 예시파일 다운로드",
+        data=example_bytes,
+        file_name=example_name,
+        mime=(
+            "application/vnd.openxmlformats-officedocument."
+            "spreadsheetml.sheet"
+        ),
+        use_container_width=True,
+        key=f"example_{amount_column}",
     )
 
 with right:
@@ -153,6 +200,7 @@ try:
         sales_file.name,
         entry_file.getvalue(),
         entry_file.name,
+        amount_column,
     )
 
 except Exception as error:
@@ -196,7 +244,7 @@ metric3.metric(
 )
 
 metric4.metric(
-    "입력 매출 합계",
+    f"입력 매출 합계 ({amount_column})",
     f"{matched_amount:,.0f}원",
 )
 
@@ -267,7 +315,7 @@ with log_tab:
 st.download_button(
     "📥 최종 매출 기재용 엑셀 다운로드",
     data=excel_bytes,
-    file_name="최종매출_자동매칭.xlsx",
+    file_name=f"{mode}_자동매칭.xlsx",
     mime=(
         "application/vnd.openxmlformats-officedocument."
         "spreadsheetml.sheet"
