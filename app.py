@@ -7,7 +7,7 @@ import streamlit as st
 from matcher import process_files
 
 
-APP_VERSION = "3.0.0"
+APP_VERSION = "3.1.0"
 
 st.set_page_config(
     page_title="공동구매 매출 자동 매칭",
@@ -96,6 +96,7 @@ st.markdown(
 )
 
 st.info(
+    "파일 순서와 시트 순서를 자동으로 확인합니다. "
     "완전 일치·상품명 축약은 자동 입력하고, "
     "셀러명이 비슷하지만 다른 경우에는 원본 행을 위에 둔 채 "
     "후보 행을 아래에 따로 추가합니다. "
