@@ -398,7 +398,11 @@ def parse_sales_file(
     return rows
 
 
-def parse_entry_file(file_bytes: bytes, file_name: str) -> pd.DataFrame:
+def parse_entry_file(
+    file_bytes: bytes,
+    file_name: str,
+    target_month: int | None = None,
+) -> pd.DataFrame:
     raw, header_row = find_sheet_and_header(
         file_bytes,
         file_name,
@@ -422,8 +426,8 @@ def parse_entry_file(file_bytes: bytes, file_name: str) -> pd.DataFrame:
             df[column] = ""
     result = df[ENTRY_REQUIRED]
 
-    # 매출 기재용 누적 파일에서는 가장 최근 년·월만 처리한다.
-    # 현재 첨부 파일은 자동으로 2026년 8월 31개 행만 선택된다.
+    # 월을 고르면 해당 월이 존재하는 가장 최신 연도만 처리한다.
+    # '전체'는 target_month=None으로 전달되어 모든 기간을 유지한다.
     periods: list[tuple[int, int]] = []
     row_periods: list[tuple[int, int] | None] = []
     for _, row in result.iterrows():
@@ -434,8 +438,11 @@ def parse_entry_file(file_bytes: bytes, file_name: str) -> pd.DataFrame:
         if period and (clean_text(row["셀러"]) or clean_text(row["품목"])):
             periods.append(period)
 
-    if periods:
-        latest = max(periods)
+    if periods and target_month is not None:
+        matching_periods = [period for period in periods if period[1] == target_month]
+        if not matching_periods:
+            raise ValueError(f"오른쪽 매출 기재용 파일에 {target_month}월 행이 없습니다.")
+        latest = max(matching_periods)
         keep = [period == latest for period in row_periods]
         result = result.loc[keep].copy()
         result.attrs["target_period"] = latest
@@ -445,7 +452,7 @@ def parse_entry_file(file_bytes: bytes, file_name: str) -> pd.DataFrame:
             result["셀러"].map(clean_text).ne("") | result["품목"].map(clean_text).ne("")
         ].copy()
         result.attrs["target_period"] = None
-        result.attrs["target_period_label"] = "업로드 범위"
+        result.attrs["target_period_label"] = "전체 기간"
     return result.reset_index(drop=True)
 
 
@@ -708,14 +715,15 @@ def process_files(
     entry_bytes: bytes,
     entry_name: str,
     amount_column: str = "정상금액",
+    target_month: int | None = None,
 ):
     try:
         sales_rows = parse_sales_file(sales_bytes, sales_name, amount_column)
-        entry_df = parse_entry_file(entry_bytes, entry_name)
+        entry_df = parse_entry_file(entry_bytes, entry_name, target_month)
     except ValueError as first_error:
         try:
             sales_rows = parse_sales_file(entry_bytes, entry_name, amount_column)
-            entry_df = parse_entry_file(sales_bytes, sales_name)
+            entry_df = parse_entry_file(sales_bytes, sales_name, target_month)
         except ValueError:
             raise first_error
     main_df, unmatched_df, log_df = merge_sales(entry_df, sales_rows, amount_column)
