@@ -13,7 +13,24 @@ import pandas as pd
 
 
 ENTRY_REQUIRED = ["년", "월", "진행일", "밴더사", "셀러", "셀러 링크", "팔로워", "품목", "판매금액", "비고"]
-SALES_REQUIRED = ["상품코드", "상품명", "상품등록일", "최근주문일", "정상금액"]
+
+HEADER_ALIASES = {
+    "년": ["년", "년도", "연도", "year"],
+    "월": ["월", "month"],
+    "진행일": ["진행일", "진행기간", "판매기간", "공구기간", "일정"],
+    "밴더사": ["밴더사", "벤더사", "밴더", "벤더", "업체"],
+    "셀러": ["셀러", "셀러명", "판매자", "인플루언서", "진행자", "계정명"],
+    "셀러 링크": ["셀러링크", "셀러주소", "인스타링크", "링크", "url"],
+    "팔로워": ["팔로워", "팔로워수"],
+    "품목": ["품목", "상품명", "상품", "제품명", "제품", "아이템", "item"],
+    "판매금액": ["판매금액", "매출액", "매출", "금액"],
+    "비고": ["비고", "메모", "참고"],
+    "상품코드": ["상품코드", "상품번호", "제품코드", "코드", "sku"],
+    "상품등록일": ["상품등록일", "등록일", "상품등록일시"],
+    "최근주문일": ["최근주문일", "최근주문일시", "마지막주문일", "최종주문일"],
+    "결제금액": ["결제금액", "결제액", "주문금액", "판매금액", "매출액", "매출", "금액"],
+    "정상금액": ["정상금액", "정산금액", "정상매출", "최종매출", "판매금액", "매출액", "매출", "금액"],
+}
 
 
 @dataclass
@@ -37,16 +54,34 @@ def clean_text(value: Any) -> str:
 
 
 def clean_column(value: Any) -> str:
-    return re.sub(r"\s+", "", clean_text(value))
+    text = unicodedata.normalize("NFKC", clean_text(value)).lower()
+    return re.sub(r"[^가-힣a-z0-9]", "", text)
 
 
-def find_header_row(raw: pd.DataFrame, required: list[str], max_rows: int = 60) -> int:
-    normalized_required = {clean_column(value) for value in required}
+def aliases_for(target: str) -> list[str]:
+    return [clean_column(value) for value in HEADER_ALIASES.get(target, [target])]
+
+
+def column_matches(value: Any, target: str, *, allow_contains: bool = True) -> bool:
+    normalized = clean_column(value)
+    aliases = aliases_for(target)
+    if normalized in aliases:
+        return True
+    if not allow_contains:
+        return False
+    return any(len(alias) >= 2 and alias in normalized for alias in aliases)
+
+
+def find_header_row(raw: pd.DataFrame, required: list[str], max_rows: int = 100) -> int:
     for row_index in range(min(len(raw), max_rows)):
-        row_values = {clean_column(value) for value in raw.iloc[row_index].tolist()}
-        if normalized_required.issubset(row_values):
+        row_values = raw.iloc[row_index].tolist()
+        if all(any(column_matches(value, target) for value in row_values) for target in required):
             return row_index
-    raise ValueError("필수 제목 행을 찾지 못했습니다: " + ", ".join(required))
+    raise ValueError(
+        "제목 행을 찾지 못했습니다. 최소한 "
+        + " · ".join(required)
+        + " 열만 있으면 됩니다. 띄어쓰기나 '상품명/품목', '매출/금액' 같은 표현 차이는 상관없습니다."
+    )
 
 
 def read_sheets(file_bytes: bytes, file_name: str, header: int | None = 0) -> list[pd.DataFrame]:
@@ -98,30 +133,76 @@ def find_sheet_and_header(
     )
 
 
-def find_column(df: pd.DataFrame, target: str) -> str:
-    normalized = clean_column(target)
+def find_column(df: pd.DataFrame, target: str, *, required: bool = True) -> str | None:
+    # 완전 일치를 먼저 선택해 '금액' 같은 짧은 별칭이 엉뚱한 열을 잡지 않게 한다.
     for column in df.columns:
-        if clean_column(column) == normalized:
+        if column_matches(column, target, allow_contains=False):
             return column
-    raise ValueError(f"'{target}' 열을 찾지 못했습니다.")
+    for column in df.columns:
+        if column_matches(column, target, allow_contains=True):
+            return column
+    if required:
+        raise ValueError(f"'{target}'에 해당하는 열을 찾지 못했습니다.")
+    return None
 
 
-def parse_product_name(product_name: Any) -> tuple[str, str]:
+def parse_product_name(product_name: Any, seller_value: Any = "") -> tuple[str, str]:
     text = clean_text(product_name)
     text = re.sub(r"\s*옵션별\s*보기\s*$", "", text, flags=re.IGNORECASE)
-    match = re.match(r"^(.*?)\s*[xX×]\s*(.+)$", text)
+    match = re.match(r"^(.*?)\s*[xX×*＊]\s*(.+)$", text)
     if match:
-        seller = clean_text(match.group(1))
+        seller = clean_text(seller_value) or clean_text(match.group(1))
         item = clean_text(match.group(2))
         item = re.sub(r"^무아스\s*", "", item, flags=re.IGNORECASE)
         return seller, item
+    seller = clean_text(seller_value)
     item = re.sub(r"^(?:\[[^\]]+\]\s*)*무아스\s*", "", text, flags=re.IGNORECASE)
-    return "", clean_text(item)
+    return seller, clean_text(item)
 
 
 def normalize_seller(value: Any) -> str:
     text = unicodedata.normalize("NFKC", clean_text(value)).lower()
     return re.sub(r"[^가-힣a-z0-9]", "", text)
+
+
+def seller_keys(value: Any) -> set[str]:
+    normalized = normalize_seller(value)
+    if not normalized:
+        return set()
+    keys = {normalized}
+    suffixes = (
+        "공식브랜드스토어", "브랜드스토어", "공식스토어", "스토어",
+        "공식몰", "카페", "마켓", "공구", "샵", "shop",
+    )
+    changed = True
+    trimmed = normalized
+    while changed:
+        changed = False
+        for suffix in suffixes:
+            if trimmed.endswith(suffix) and len(trimmed) > len(suffix) + 1:
+                trimmed = trimmed[: -len(suffix)]
+                keys.add(trimmed)
+                changed = True
+                break
+    return keys
+
+
+def seller_similarity(left: Any, right: Any) -> float:
+    left_keys, right_keys = seller_keys(left), seller_keys(right)
+    if not left_keys or not right_keys:
+        return 0.0
+    if left_keys & right_keys:
+        return 1.0
+    best = 0.0
+    for left_key in left_keys:
+        for right_key in right_keys:
+            contains = (
+                (left_key in right_key or right_key in left_key)
+                and min(len(left_key), len(right_key)) >= 2
+            )
+            ratio = difflib.SequenceMatcher(None, left_key, right_key).ratio()
+            best = max(best, 0.92 if contains else ratio)
+    return best
 
 
 def split_sellers(value: Any) -> list[str]:
@@ -266,29 +347,42 @@ def parse_sales_file(
     raw, header_row = find_sheet_and_header(
         file_bytes,
         file_name,
-        ["상품코드", "상품명", amount_column],
+        ["품목", amount_column],
     )
     headers = [clean_text(value) or f"빈열_{index}" for index, value in enumerate(raw.iloc[header_row].tolist())]
     df = raw.iloc[header_row + 1 :].copy()
     df.columns = headers
     df = df.dropna(how="all")
 
-    code_col = find_column(df, "상품코드")
-    name_col = find_column(df, "상품명")
-    registered_col = find_column(df, "상품등록일")
-    recent_col = find_column(df, "최근주문일")
+    code_col = find_column(df, "상품코드", required=False)
+    name_col = find_column(df, "품목")
+    seller_col = find_column(df, "셀러", required=False)
+    registered_col = find_column(df, "상품등록일", required=False)
+    recent_col = find_column(df, "최근주문일", required=False)
     amount_col = find_column(df, amount_column)
 
     rows: list[SalesRow] = []
     for source_index, (_, row) in enumerate(df.iterrows()):
-        code = clean_text(row[code_col])
-        if not re.match(r"^SMO", code, flags=re.IGNORECASE):
+        product_name = clean_text(row[name_col])
+        if not product_name:
             continue
-        seller, item = parse_product_name(row[name_col])
-        amount_text = clean_text(row[amount_col]).replace(",", "").replace("원", "").replace("₩", "")
-        amount = int(round(pd.to_numeric(amount_text, errors="coerce") or 0))
-        registered = pd.to_datetime(row[registered_col], errors="coerce")
-        recent = pd.to_datetime(row[recent_col], errors="coerce")
+        code = clean_text(row[code_col]) if code_col else f"행{source_index + header_row + 2}"
+        seller, item = parse_product_name(product_name, row[seller_col] if seller_col else "")
+        # 요청대로 셀러명+상품명이 있는 매출만 오른쪽에 연결한다.
+        if not seller or not item:
+            continue
+        amount_text = (
+            clean_text(row[amount_col])
+            .replace(",", "")
+            .replace("원", "")
+            .replace("₩", "")
+            .replace("(", "-")
+            .replace(")", "")
+        )
+        numeric_amount = pd.to_numeric(amount_text, errors="coerce")
+        amount = 0 if pd.isna(numeric_amount) else int(round(float(numeric_amount)))
+        registered = pd.to_datetime(row[registered_col], errors="coerce") if registered_col else pd.NaT
+        recent = pd.to_datetime(row[recent_col], errors="coerce") if recent_col else pd.NaT
         rows.append(
             SalesRow(
                 source_index=source_index,
@@ -308,7 +402,7 @@ def parse_entry_file(file_bytes: bytes, file_name: str) -> pd.DataFrame:
     raw, header_row = find_sheet_and_header(
         file_bytes,
         file_name,
-        ["년", "월", "진행일", "밴더사", "셀러", "품목", "판매금액"],
+        ["셀러", "품목"],
     )
     headers = [
         clean_text(value) or f"빈열_{index}"
@@ -319,15 +413,47 @@ def parse_entry_file(file_bytes: bytes, file_name: str) -> pd.DataFrame:
     raw = raw.dropna(how="all")
     renamed = {}
     for target in ENTRY_REQUIRED:
-        renamed[find_column(raw, target)] = target
+        matched_column = find_column(raw, target, required=False)
+        if matched_column is not None and matched_column not in renamed:
+            renamed[matched_column] = target
     df = raw.rename(columns=renamed).copy()
     for column in ENTRY_REQUIRED:
         if column not in df.columns:
             df[column] = ""
-    return df[ENTRY_REQUIRED]
+    result = df[ENTRY_REQUIRED]
+
+    # 매출 기재용 누적 파일에서는 가장 최근 년·월만 처리한다.
+    # 현재 첨부 파일은 자동으로 2026년 8월 31개 행만 선택된다.
+    periods: list[tuple[int, int]] = []
+    row_periods: list[tuple[int, int] | None] = []
+    for _, row in result.iterrows():
+        year_match = re.search(r"(20\d{2})", clean_text(row["년"]))
+        month_match = re.search(r"(1[0-2]|0?[1-9])", clean_text(row["월"]))
+        period = (int(year_match.group(1)), int(month_match.group(1))) if year_match and month_match else None
+        row_periods.append(period)
+        if period and (clean_text(row["셀러"]) or clean_text(row["품목"])):
+            periods.append(period)
+
+    if periods:
+        latest = max(periods)
+        keep = [period == latest for period in row_periods]
+        result = result.loc[keep].copy()
+        result.attrs["target_period"] = latest
+        result.attrs["target_period_label"] = f"{latest[0]}년 {latest[1]}월"
+    else:
+        result = result[
+            result["셀러"].map(clean_text).ne("") | result["품목"].map(clean_text).ne("")
+        ].copy()
+        result.attrs["target_period"] = None
+        result.attrs["target_period_label"] = "업로드 범위"
+    return result.reset_index(drop=True)
 
 
-def merge_sales(entry_df: pd.DataFrame, sales_rows: list[SalesRow]):
+def merge_sales(
+    entry_df: pd.DataFrame,
+    sales_rows: list[SalesRow],
+    amount_column: str = "정상금액",
+):
     used: set[int] = set()
     result_rows: list[dict[str, Any]] = []
     match_log: list[dict[str, Any]] = []
@@ -349,12 +475,10 @@ def merge_sales(entry_df: pd.DataFrame, sales_rows: list[SalesRow]):
             seller_norm = normalize_seller(sellers[0])
             candidates = []
             for index, sale in enumerate(sales_rows):
-                if index in used or normalize_seller(sale.seller) != seller_norm:
-                    continue
-                if not date_eligible(start, end, sale):
+                if index in used or seller_similarity(sellers[0], sale.seller) < 0.90:
                     continue
                 similarity = item_similarity(base["품목"], sale.item)
-                if similarity < 0.45:
+                if similarity < 0.40:
                     continue
                 candidates.append((index, sale, similarity, date_score(start, sale)))
 
@@ -370,8 +494,8 @@ def merge_sales(entry_df: pd.DataFrame, sales_rows: list[SalesRow]):
                         continue
                     selected.append((candidate[0], candidate[1], candidate[2]))
                     families.append(family)
-            elif [candidate for candidate in candidates if candidate[2] >= 0.5]:
-                candidates = [candidate for candidate in candidates if candidate[2] >= 0.5]
+            elif [candidate for candidate in candidates if candidate[2] >= 0.40]:
+                candidates = [candidate for candidate in candidates if candidate[2] >= 0.40]
                 best = max(candidates, key=lambda x: (x[2], x[1].amount != 0, x[3], x[1].registered or datetime(1900, 1, 1)))
                 selected = [(best[0], best[1], best[2])]
 
@@ -399,7 +523,7 @@ def merge_sales(entry_df: pd.DataFrame, sales_rows: list[SalesRow]):
                         "최근주문일": sale.recent,
                         "스룩 셀러": sale.seller,
                         "스룩 품목": sale.item,
-                        "정상금액": sale.amount,
+                        amount_column: sale.amount,
                         "매칭상태": status,
                     }
                 )
@@ -414,7 +538,7 @@ def merge_sales(entry_df: pd.DataFrame, sales_rows: list[SalesRow]):
             entry_seller = normalize_seller(sellers[0])
             fuzzy = []
             for index, sale in enumerate(sales_rows):
-                if index in used or not sale.seller or not date_eligible(start, end, sale):
+                if index in used or not sale.seller:
                     continue
                 sale_seller = normalize_seller(sale.seller)
                 seller_ratio = difflib.SequenceMatcher(None, entry_seller, sale_seller).ratio()
@@ -445,7 +569,7 @@ def merge_sales(entry_df: pd.DataFrame, sales_rows: list[SalesRow]):
                         "최근주문일": sale.recent,
                         "스룩 셀러": sale.seller,
                         "스룩 품목": sale.item,
-                        "정상금액": sale.amount,
+                        amount_column: sale.amount,
                         "매칭상태": f"유사 후보(셀러 유사도 {seller_ratio:.0%})",
                     }
                 )
@@ -473,12 +597,13 @@ def merge_sales(entry_df: pd.DataFrame, sales_rows: list[SalesRow]):
                 "최근주문일": sale.recent,
                 "셀러": sale.seller,
                 "품목": sale.item,
-                "정상금액": sale.amount,
+                amount_column: sale.amount,
                 "확인사항": reason,
             }
         )
 
     main_df = pd.DataFrame(result_rows, columns=ENTRY_REQUIRED + ["매칭상태"])
+    main_df.attrs.update(entry_df.attrs)
     unmatched_df = pd.DataFrame(unmatched)
     if not unmatched_df.empty:
         unmatched_df["_sort"] = unmatched_df["구분"].map({"셀러 상품": 0, "셀러 미표기/자사상품": 1}).fillna(2)
@@ -493,9 +618,12 @@ def export_result(
     log_df: pd.DataFrame,
     amount_column: str,
 ) -> bytes:
+    period_label = clean_text(main_df.attrs.get("target_period_label", "최근월"))
+    month_match = re.search(r"(1[0-2]|0?[1-9])월", period_label)
+    result_sheet = f"{int(month_match.group(1))}월매출기재용" if month_match else "매출기재용"
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter", datetime_format="yyyy-mm-dd hh:mm") as writer:
-        main_df.to_excel(writer, index=False, sheet_name="6월매출기재용")
+        main_df.to_excel(writer, index=False, sheet_name=result_sheet)
         unmatched_df.to_excel(writer, index=False, sheet_name="스룩만 있음")
         log_df.to_excel(writer, index=False, sheet_name="매칭내역", startrow=7)
 
@@ -510,7 +638,7 @@ def export_result(
         warning = workbook.add_format({"bg_color": "#FFF2CC", "font_color": "#7F6000", "align": "center", "border": 1})
         missing = workbook.add_format({"bg_color": "#FCE4D6", "font_color": "#C00000", "align": "center", "border": 1})
 
-        main = writer.sheets["6월매출기재용"]
+        main = writer.sheets[result_sheet]
         widths = [10, 8, 28, 18, 18, 42, 10, 40, 15, 22, 24]
         for idx, width in enumerate(widths):
             main.set_column(idx, idx, width, body)
@@ -551,11 +679,11 @@ def export_result(
         log.merge_range("A1:K1", f"{amount_column} 기준 매출 자동 매칭 결과", workbook.add_format({"bold": True, "font_color": "#FFFFFF", "bg_color": "#203864", "font_size": 16, "align": "center", "valign": "vcenter"}))
         labels = ["기재용 행 수", "매출 입력 행", "매출 미확인", "스룩만 있음", "입력 매출 합계"]
         formulas = [
-            f"=COUNTA('6월매출기재용'!A2:A{len(main_df)+1})",
-            f"=COUNT('6월매출기재용'!I2:I{len(main_df)+1})",
-            f'=COUNTIF(\'6월매출기재용\'!K2:K{len(main_df)+1},"매출 미확인")',
+            f"=COUNTA('{result_sheet}'!A2:A{len(main_df)+1})",
+            f"=COUNT('{result_sheet}'!I2:I{len(main_df)+1})",
+            f'=COUNTIF(\'{result_sheet}\'!K2:K{len(main_df)+1},"매출 미확인")',
             f"=COUNTA('스룩만 있음'!B2:B{len(unmatched_df)+1})",
-            f"=SUM('6월매출기재용'!I2:I{len(main_df)+1})",
+            f"=SUM('{result_sheet}'!I2:I{len(main_df)+1})",
         ]
         label_fmt = workbook.add_format({"bold": True, "bg_color": "#D9E2F3", "border": 1})
         for row_index, (label, formula) in enumerate(zip(labels, formulas), start=1):
@@ -590,6 +718,6 @@ def process_files(
             entry_df = parse_entry_file(sales_bytes, sales_name)
         except ValueError:
             raise first_error
-    main_df, unmatched_df, log_df = merge_sales(entry_df, sales_rows)
+    main_df, unmatched_df, log_df = merge_sales(entry_df, sales_rows, amount_column)
     excel_bytes = export_result(main_df, unmatched_df, log_df, amount_column)
     return main_df, unmatched_df, log_df, excel_bytes
