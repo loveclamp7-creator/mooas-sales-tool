@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import streamlit as st
 
@@ -8,7 +10,7 @@ from example_files import FINAL_EXAMPLE_BYTES, INTERMEDIATE_EXAMPLE_BYTES
 from matcher import process_files
 
 
-APP_VERSION = "4.1.1"
+APP_VERSION = "4.2.0"
 
 st.set_page_config(
     page_title="공동구매 매출 자동 매칭",
@@ -60,7 +62,7 @@ with st.sidebar:
 
     st.divider()
 
-    st.caption(f"v{APP_VERSION} · 최근월 셀러+상품 자동 매칭")
+    st.caption(f"v{APP_VERSION} · 매출월 선택 자동 매칭")
 
     st.markdown("---")
 
@@ -107,6 +109,23 @@ mode = st.radio(
 
 is_intermediate = mode.startswith("중간")
 amount_column = "결제금액" if is_intermediate else "정상금액"
+
+month_options = ["전체"] + [f"{month}월" for month in range(1, 13)]
+current_month = datetime.now(ZoneInfo("Asia/Seoul")).month
+selected_month_label = st.selectbox(
+    "확인할 매출월",
+    month_options,
+    index=current_month,
+    help=(
+        "선택한 월이 여러 연도에 있으면 가장 최신 연도만 처리합니다. "
+        "전체를 선택하면 모든 기간을 처리합니다."
+    ),
+)
+target_month = (
+    None
+    if selected_month_label == "전체"
+    else int(selected_month_label.replace("월", ""))
+)
 example_bytes = (
     INTERMEDIATE_EXAMPLE_BYTES
     if is_intermediate
@@ -122,7 +141,7 @@ st.info(
     f"현재 선택: {mode}\n\n"
     "왼쪽 파일의 열 순서나 띄어쓰기가 달라도 괜찮습니다. "
     "셀러명(또는 ‘셀러 x 상품명’)·상품명·금액만 찾아서, "
-    "오른쪽 누적 파일의 가장 최근 월에만 판매금액을 입력합니다."
+    "오른쪽 누적 파일에서 위에서 선택한 월에만 판매금액을 입력합니다."
 )
 
 
@@ -200,6 +219,7 @@ try:
         entry_file.getvalue(),
         entry_file.name,
         amount_column,
+        target_month,
     )
 
 except Exception as error:
@@ -317,7 +337,7 @@ with log_tab:
 st.download_button(
     "📥 최종 매출 기재용 엑셀 다운로드",
     data=excel_bytes,
-    file_name=f"{mode}_자동매칭.xlsx",
+    file_name=f"{target_period}_{mode}_자동매칭.xlsx",
     mime=(
         "application/vnd.openxmlformats-officedocument."
         "spreadsheetml.sheet"
