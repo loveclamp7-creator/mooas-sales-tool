@@ -8,7 +8,7 @@ from example_files import FINAL_EXAMPLE_BYTES, INTERMEDIATE_EXAMPLE_BYTES
 from matcher import process_files
 
 
-APP_VERSION = "4.1.0"
+APP_VERSION = "4.1.1"
 
 st.set_page_config(
     page_title="공동구매 매출 자동 매칭",
@@ -247,7 +247,7 @@ metric3.metric(
 
 metric4.metric(
     f"입력 매출 합계 ({amount_column})",
-    f"{matched_amount:,.0f}원",
+    f"{matched_amount:,.0f}",
 )
 
 
@@ -270,7 +270,7 @@ with main_tab:
         column_config={
             "판매금액": st.column_config.NumberColumn(
                 "판매금액",
-                format="%,d원",
+                format="%,d",
             ),
             "매칭상태": st.column_config.TextColumn(
                 "매칭상태",
@@ -298,7 +298,7 @@ with unmatched_tab:
             column_config={
                 amount_column: st.column_config.NumberColumn(
                     amount_column,
-                    format="%,d원",
+                    format="%,d",
                 )
             },
         )
