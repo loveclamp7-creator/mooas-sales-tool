@@ -8,7 +8,7 @@ from example_files import FINAL_EXAMPLE_BYTES, INTERMEDIATE_EXAMPLE_BYTES
 from matcher import process_files
 
 
-APP_VERSION = "4.0.0"
+APP_VERSION = "4.1.0"
 
 st.set_page_config(
     page_title="공동구매 매출 자동 매칭",
@@ -60,7 +60,7 @@ with st.sidebar:
 
     st.divider()
 
-    st.caption(f"v{APP_VERSION} · 결제금액/정상금액 선택")
+    st.caption(f"v{APP_VERSION} · 최근월 셀러+상품 자동 매칭")
 
     st.markdown("---")
 
@@ -120,10 +120,9 @@ example_name = (
 
 st.info(
     f"현재 선택: {mode}\n\n"
-    "완전 일치·상품명 축약은 자동 입력하고, "
-    "셀러명이 비슷하지만 다른 경우에는 원본 행을 위에 둔 채 "
-    "후보 행을 아래에 따로 추가합니다. "
-    "스룩에만 있는 상품은 별도 시트로 정리됩니다."
+    "왼쪽 파일의 열 순서나 띄어쓰기가 달라도 괜찮습니다. "
+    "셀러명(또는 ‘셀러 x 상품명’)·상품명·금액만 찾아서, "
+    "오른쪽 누적 파일의 가장 최근 월에만 판매금액을 입력합니다."
 )
 
 
@@ -226,6 +225,9 @@ matched_amount = int(
     main_df["판매금액"].fillna(0).sum()
 )
 
+target_period = main_df.attrs.get("target_period_label", "가장 최근 월")
+st.success(f"처리 대상: {target_period} · {len(main_df):,}개 행")
+
 metric1, metric2, metric3, metric4 = st.columns(4)
 
 metric1.metric(
@@ -294,8 +296,8 @@ with unmatched_tab:
             use_container_width=True,
             hide_index=True,
             column_config={
-                "정상금액": st.column_config.NumberColumn(
-                    "정상금액",
+                amount_column: st.column_config.NumberColumn(
+                    amount_column,
                     format="%,d원",
                 )
             },
