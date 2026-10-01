@@ -6,342 +6,101 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 
-from example_files import FINAL_EXAMPLE_BYTES, INTERMEDIATE_EXAMPLE_BYTES
 from matcher import process_files
 
 
-APP_VERSION = "4.2.0"
+APP_VERSION = "5.0.0"
+st.set_page_config(page_title="무아스 공동구매 매출 자동 정리", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
+st.markdown("""
+<style>
+  .block-container {padding-top:2rem;padding-bottom:4rem;}
+  [data-testid="stSidebar"] {min-width:280px;max-width:280px;}
+  .subtitle {color:#667085;margin-bottom:1.2rem;}
+</style>
+""", unsafe_allow_html=True)
 
-st.set_page_config(
-    page_title="공동구매 매출 자동 매칭",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
-st.markdown(
-    """
-    <style>
-        .block-container {
-            padding-top: 2rem;
-            padding-bottom: 4rem;
-        }
-
-        [data-testid="stSidebar"] {
-            min-width: 280px;
-            max-width: 280px;
-        }
-
-        .title {
-            font-size: 2rem;
-            font-weight: 800;
-            margin-bottom: 0.25rem;
-        }
-
-        .subtitle {
-            color: #667085;
-            margin-bottom: 1.4rem;
-        }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-
-# -----------------------------
-# 왼쪽 메뉴
-# -----------------------------
 with st.sidebar:
     st.title("🛠️ 업무 자동화 도구")
-
-    st.radio(
-        "메뉴 선택",
-        ["📊 매출 자동 매칭"],
-        index=0,
-    )
-
+    st.radio("메뉴 선택", ["📊 공동구매 매출 정리"], index=0)
     st.divider()
-
-    st.caption(f"v{APP_VERSION} · 매출월 선택 자동 매칭")
-
+    st.caption(f"v{APP_VERSION} · 주문번호 기준 매출 매칭")
     st.markdown("---")
+    st.markdown('<div style="text-align:center;color:#98A2B3;font-size:12px;line-height:1.7">© 2026 Developed by MINJEEWON<br>MOOAS Sales Automation</div>', unsafe_allow_html=True)
 
-    st.markdown(
-        """
-        <div style="
-            text-align: center;
-            color: #98A2B3;
-            font-size: 12px;
-            line-height: 1.7;
-            padding: 6px 0 12px 0;
-        ">
-            © 2026 Developed by MINJEEWON<br>
-            MOOAS Sales Automation
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+st.title("📊 무아스 공동구매 매출 자동 정리")
+st.markdown('<div class="subtitle">스룩 주문내역과 차액 파일을 주문번호로 연결해, 무아스 공동구매 누적 리스트의 판매금액 공란을 채웁니다.</div>', unsafe_allow_html=True)
 
-
-# -----------------------------
-# 메인 화면
-# -----------------------------
-st.title("📊 스룩 매출 자동 매칭")
-
-st.markdown(
-    """
-    <div class="subtitle">
-        스룩 상품별 매출 파일과 매출 기재용 파일을 함께 올리면,
-        동일 셀러·품목을 찾아 판매금액을 자동 입력합니다.
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-mode = st.radio(
-    "매출 관리 기준",
-    [
-        "중간 매출 관리 (결제금액 기준)",
-        "최종 매출 관리 (정상금액 기준)",
-    ],
-    horizontal=True,
-)
-
-is_intermediate = mode.startswith("중간")
-amount_column = "결제금액" if is_intermediate else "정상금액"
-
-month_options = ["전체"] + [f"{month}월" for month in range(1, 13)]
+month_options = [f"{month}월" for month in range(1, 13)]
 current_month = datetime.now(ZoneInfo("Asia/Seoul")).month
-selected_month_label = st.selectbox(
-    "확인할 매출월",
-    month_options,
-    index=current_month,
-    help=(
-        "선택한 월이 여러 연도에 있으면 가장 최신 연도만 처리합니다. "
-        "전체를 선택하면 모든 기간을 처리합니다."
-    ),
-)
-target_month = (
-    None
-    if selected_month_label == "전체"
-    else int(selected_month_label.replace("월", ""))
-)
-example_bytes = (
-    INTERMEDIATE_EXAMPLE_BYTES
-    if is_intermediate
-    else FINAL_EXAMPLE_BYTES
-)
-example_name = (
-    "중간 매출 관리 (결제금액기준) 예시파일.xlsx"
-    if is_intermediate
-    else "최종 매출 관리 (정상금액기준) 예시파일.xlsx"
-)
+selected_month_label = st.selectbox("확인할 매출월", month_options, index=current_month - 1)
+target_month = int(selected_month_label.replace("월", ""))
 
 st.info(
-    f"현재 선택: {mode}\n\n"
-    "왼쪽 파일의 열 순서나 띄어쓰기가 달라도 괜찮습니다. "
-    "셀러명(또는 ‘셀러 x 상품명’)·상품명·금액만 찾아서, "
-    "오른쪽 누적 파일에서 위에서 선택한 월에만 판매금액을 입력합니다."
+    "처리 기준\n\n"
+    "• 차액 파일은 `상세내역_통합` 탭의 주문번호와 ‘셀러명 × 무아스 상품명’을 확인합니다.\n"
+    "• 실제 판매금액은 스룩 주문내역의 같은 주문번호 `★결제액(수정가능)`을 합산합니다.\n"
+    "• 오른쪽 누적 리스트의 기존 금액은 유지하고, 선택 월의 판매금액 공란만 채웁니다.\n"
+    "• 비즈브릭스·레몬트리·지엠홀딩스는 판매금액을 공란으로 유지합니다."
 )
 
-
-# -----------------------------
-# 파일 업로드
-# -----------------------------
 left, right = st.columns(2)
-
 with left:
-    sales_file = st.file_uploader(
-        f"① {mode} 원본 파일",
-        type=["xlsx", "xls", "csv"],
-        help=(
-            "상품코드·상품명·상품등록일·최근주문일·"
-            f"{amount_column} 열이 있는 파일"
-        ),
-        key=f"sales_file_{amount_column}",
+    source_files = st.file_uploader(
+        "① 매출 원본 파일들", type=["xlsx", "xls"], accept_multiple_files=True,
+        help="(주)스룩_오클릭 파일과 상세내역_통합 탭이 있는 차액 파일을 함께 올려주세요. 여러 파일도 가능합니다."
     )
-
-    if is_intermediate:
-        st.caption(
-            "스룩 > 매출/정산 > 상품별매출관리 > "
-            "기간설정 검색 > 엑셀 내려받기 후 파일을 첨부하세요."
-        )
-    else:
-        st.caption(
-            "스룩 > 매출/정산 > 상품별매출관리 > "
-            "기간설정 검색 > 아래 내용을 긁어서 엑셀 새 파일에 "
-            "붙여넣은 후 첨부하세요. 상단 내용도 보이게 붙여넣어 주세요!"
-        )
-
-    st.download_button(
-        f"📎 {mode} 예시파일 다운로드",
-        data=example_bytes,
-        file_name=example_name,
-        mime=(
-            "application/vnd.openxmlformats-officedocument."
-            "spreadsheetml.sheet"
-        ),
-        use_container_width=True,
-        key=f"example_{amount_column}",
-    )
-
+    st.caption("필수: `(주)스룩_오클릭.xls` + `차액_YYMM.xlsx` · 왼쪽은 여러 파일 첨부 가능")
 with right:
-    entry_file = st.file_uploader(
-        "② 매출 기재용 파일",
-        type=["xlsx", "xls", "csv"],
-        help=(
-            "년·월·진행일·밴더사·셀러·품목·"
-            "판매금액 열이 있는 파일"
-        ),
-        key="entry_file",
+    template_file = st.file_uploader(
+        "② 결과 양식 파일", type=["xlsx"],
+        help="무아스 공동구매 리스트(26년도).xlsx처럼 년·월·밴더사·셀러·딜명·판매금액 열이 있는 누적 파일입니다."
+    )
+    st.caption("`무아스 공동구매 리스트(26년도).xlsx`를 올리면 기존 서식과 다른 월의 내용은 그대로 유지됩니다.")
+
+with st.expander("구글 캘린더 일정 보완 안내"):
+    st.write(
+        "이 사이트는 개인 구글 계정 권한을 직접 보관하지 않기 때문에 구글 캘린더를 자동 조회할 수는 없습니다. "
+        "대신 매출 원본에는 있지만 누적 리스트에 없는 셀러·공구를 결과 파일에 자동으로 추가하고, 비고에 `일정/밴더 확인 필요`라고 표시합니다. "
+        "이 행만 구글 캘린더와 확인하면 누락 일정도 빠르게 보완할 수 있습니다."
     )
 
-
-# 파일이 없을 때 여기에서 정지
-# 제작자 표시는 위쪽 사이드바에 있어서 항상 보임
-if sales_file is None or entry_file is None:
-    st.caption("두 파일을 모두 올리면 자동 매칭 결과가 나타납니다.")
+if not source_files or template_file is None:
+    st.caption("왼쪽에 두 종류의 매출 원본을, 오른쪽에 누적 리스트를 올리면 자동 정리됩니다.")
     st.stop()
 
-
-signature = hashlib.sha256(
-    sales_file.getvalue() + entry_file.getvalue()
-).hexdigest()
-
-
-# -----------------------------
-# 파일 처리
-# -----------------------------
+signature = hashlib.sha256(b"".join(file.getvalue() for file in source_files) + template_file.getvalue()).hexdigest()
 try:
-    main_df, unmatched_df, log_df, excel_bytes = process_files(
-        sales_file.getvalue(),
-        sales_file.name,
-        entry_file.getvalue(),
-        entry_file.name,
-        amount_column,
-        target_month,
+    result_df, audit_df, excel_bytes, deals, recognized, target_year = process_files(
+        [(file.getvalue(), file.name) for file in source_files], template_file.getvalue(), template_file.name, target_month
     )
-
 except Exception as error:
-    st.error(
-        "파일을 처리하지 못했습니다.\n\n"
-        f"{error}"
-    )
+    st.error(f"파일을 처리하지 못했습니다.\n\n{error}")
     st.stop()
 
+auto_count = int((result_df["상태"] == "자동 입력").sum())
+added_count = int((result_df["상태"] == "리스트에 없어 행 추가").sum())
+excluded_count = int(result_df["상태"].isin(["지정 밴더 공란 유지", "누락 행 추가 · 지정 밴더 공란"]).sum())
+input_total = int(result_df.loc[result_df["상태"].isin(["자동 입력", "리스트에 없어 행 추가"]), "판매금액"].fillna(0).sum())
 
-# -----------------------------
-# 결과 요약
-# -----------------------------
-matched_count = int(
-    main_df["판매금액"].notna().sum()
-)
-
-missing_count = int(
-    (main_df["매칭상태"] == "매출 미확인").sum()
-)
-
-matched_amount = int(
-    main_df["판매금액"].fillna(0).sum()
-)
-
-target_period = main_df.attrs.get("target_period_label", "가장 최근 월")
-st.success(f"처리 대상: {target_period} · {len(main_df):,}개 행")
-
+st.success(f"{target_year}년 {target_month}월 매출 정리가 완료됐습니다.")
 metric1, metric2, metric3, metric4 = st.columns(4)
+metric1.metric("판매금액 입력", f"{auto_count:,}건")
+metric2.metric("누락 행 자동 추가", f"{added_count:,}건")
+metric3.metric("지정 밴더 공란", f"{excluded_count:,}건")
+metric4.metric("입력 매출 합계", f"{input_total:,.0f}")
 
-metric1.metric(
-    "기재용 행",
-    f"{len(main_df):,}건",
-)
+result_tab, order_tab, file_tab = st.tabs(["결과 확인", "주문번호 매칭", "인식한 파일"])
+with result_tab:
+    st.dataframe(result_df, use_container_width=True, hide_index=True, column_config={"판매금액": st.column_config.NumberColumn("판매금액", format="%,d")})
+with order_tab:
+    st.dataframe(audit_df, use_container_width=True, hide_index=True, column_config={"결제액": st.column_config.NumberColumn("결제액", format="%,d")})
+with file_tab:
+    for label in recognized:
+        st.write(f"✓ {label}")
 
-metric2.metric(
-    "매출 입력",
-    f"{matched_count:,}건",
-)
-
-metric3.metric(
-    "매출 미확인",
-    f"{missing_count:,}건",
-)
-
-metric4.metric(
-    f"입력 매출 합계 ({amount_column})",
-    f"{matched_amount:,.0f}",
-)
-
-
-# -----------------------------
-# 결과 표
-# -----------------------------
-main_tab, unmatched_tab, log_tab = st.tabs(
-    [
-        "최종 매출기재용",
-        "스룩만 있음",
-        "매칭내역",
-    ]
-)
-
-with main_tab:
-    st.dataframe(
-        main_df,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "판매금액": st.column_config.NumberColumn(
-                "판매금액",
-                format="%,d",
-            ),
-            "매칭상태": st.column_config.TextColumn(
-                "매칭상태",
-                width="medium",
-            ),
-        },
-    )
-
-with unmatched_tab:
-    if unmatched_df.empty:
-        st.success(
-            "스룩에만 있는 항목이 없습니다."
-        )
-
-    else:
-        st.warning(
-            "기재용 파일에서 찾지 못한 스룩 항목이 "
-            f"{len(unmatched_df):,}건 있습니다."
-        )
-
-        st.dataframe(
-            unmatched_df,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                amount_column: st.column_config.NumberColumn(
-                    amount_column,
-                    format="%,d",
-                )
-            },
-        )
-
-with log_tab:
-    st.dataframe(
-        log_df,
-        use_container_width=True,
-        hide_index=True,
-    )
-
-
-# -----------------------------
-# 엑셀 다운로드
-# -----------------------------
 st.download_button(
-    "📥 최종 매출 기재용 엑셀 다운로드",
-    data=excel_bytes,
-    file_name=f"{target_period}_{mode}_자동매칭.xlsx",
-    mime=(
-        "application/vnd.openxmlformats-officedocument."
-        "spreadsheetml.sheet"
-    ),
-    use_container_width=True,
-    key=f"download_{signature}",
+    "📥 매출 입력 완료 파일 다운로드", data=excel_bytes,
+    file_name=f"무아스_공동구매_리스트_{target_year}년_{target_month}월_매출입력완료.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    use_container_width=True, key=f"download_{signature}"
 )
