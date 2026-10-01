@@ -9,7 +9,7 @@ import streamlit as st
 from matcher import process_files
 
 
-APP_VERSION = "5.0.0"
+APP_VERSION = "5.1.0"
 st.set_page_config(page_title="무아스 공동구매 매출 자동 정리", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
 st.markdown("""
 <style>
@@ -39,6 +39,7 @@ st.info(
     "처리 기준\n\n"
     "• 차액 파일은 `상세내역_통합` 탭의 주문번호와 ‘셀러명 × 무아스 상품명’을 확인합니다.\n"
     "• 실제 판매금액은 스룩 주문내역의 같은 주문번호 `★결제액(수정가능)`을 합산합니다.\n"
+    "• 캘린더 최신본과 오른쪽 누적 리스트를 비교해 없는 일정은 행 전체를 추가합니다.\n"
     "• 오른쪽 누적 리스트의 기존 금액은 유지하고, 선택 월의 판매금액 공란만 채웁니다.\n"
     "• 비즈브릭스·레몬트리·지엠홀딩스는 판매금액을 공란으로 유지합니다."
 )
@@ -47,9 +48,9 @@ left, right = st.columns(2)
 with left:
     source_files = st.file_uploader(
         "① 매출 원본 파일들", type=["xlsx", "xls"], accept_multiple_files=True,
-        help="(주)스룩_오클릭 파일과 상세내역_통합 탭이 있는 차액 파일을 함께 올려주세요. 여러 파일도 가능합니다."
+        help="(주)스룩_오클릭, 상세내역_통합 탭이 있는 차액 파일, 당월 캘린더 최신본을 함께 올려주세요."
     )
-    st.caption("필수: `(주)스룩_오클릭.xls` + `차액_YYMM.xlsx` · 왼쪽은 여러 파일 첨부 가능")
+    st.caption("필수 3개: `(주)스룩_오클릭.xls` + `차액_YYMM.xlsx` + `당월 캘린더 최신본.xlsx`")
 with right:
     template_file = st.file_uploader(
         "② 결과 양식 파일", type=["xlsx"],
@@ -57,15 +58,8 @@ with right:
     )
     st.caption("`무아스 공동구매 리스트(26년도).xlsx`를 올리면 기존 서식과 다른 월의 내용은 그대로 유지됩니다.")
 
-with st.expander("구글 캘린더 일정 보완 안내"):
-    st.write(
-        "이 사이트는 개인 구글 계정 권한을 직접 보관하지 않기 때문에 구글 캘린더를 자동 조회할 수는 없습니다. "
-        "대신 매출 원본에는 있지만 누적 리스트에 없는 셀러·공구를 결과 파일에 자동으로 추가하고, 비고에 `일정/밴더 확인 필요`라고 표시합니다. "
-        "이 행만 구글 캘린더와 확인하면 누락 일정도 빠르게 보완할 수 있습니다."
-    )
-
 if not source_files or template_file is None:
-    st.caption("왼쪽에 두 종류의 매출 원본을, 오른쪽에 누적 리스트를 올리면 자동 정리됩니다.")
+    st.caption("왼쪽에 매출 원본 2개와 캘린더 최신본 1개를, 오른쪽에 누적 리스트 1개를 올리면 자동 정리됩니다.")
     st.stop()
 
 signature = hashlib.sha256(b"".join(file.getvalue() for file in source_files) + template_file.getvalue()).hexdigest()
@@ -77,15 +71,16 @@ except Exception as error:
     st.error(f"파일을 처리하지 못했습니다.\n\n{error}")
     st.stop()
 
-auto_count = int((result_df["상태"] == "자동 입력").sum())
-added_count = int((result_df["상태"] == "리스트에 없어 행 추가").sum())
-excluded_count = int(result_df["상태"].isin(["지정 밴더 공란 유지", "누락 행 추가 · 지정 밴더 공란"]).sum())
-input_total = int(result_df.loc[result_df["상태"].isin(["자동 입력", "리스트에 없어 행 추가"]), "판매금액"].fillna(0).sum())
+status_text = result_df["상태"].astype(str)
+auto_count = int(status_text.str.contains("자동 입력").sum())
+added_count = int(status_text.str.contains("캘린더 추가").sum())
+excluded_count = int(status_text.str.contains("지정 밴더 공란").sum())
+input_total = int(result_df.loc[status_text.str.contains("자동 입력"), "판매금액"].fillna(0).sum())
 
 st.success(f"{target_year}년 {target_month}월 매출 정리가 완료됐습니다.")
 metric1, metric2, metric3, metric4 = st.columns(4)
 metric1.metric("판매금액 입력", f"{auto_count:,}건")
-metric2.metric("누락 행 자동 추가", f"{added_count:,}건")
+metric2.metric("캘린더 일정 추가", f"{added_count:,}건")
 metric3.metric("지정 밴더 공란", f"{excluded_count:,}건")
 metric4.metric("입력 매출 합계", f"{input_total:,.0f}")
 
