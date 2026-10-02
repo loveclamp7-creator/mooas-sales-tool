@@ -377,7 +377,12 @@ def fill_template(template_bytes: bytes, target_month: int, deals: list[DealSale
             status = f"캘린더 추가 · {status}"
         result_rows.append({"행": row_number, "밴더사": vendor, "셀러": seller, "품목": deal_item, "판매금액": amount_cell.value, "상태": status})
 
-    result_df = pd.DataFrame(result_rows)
+    # 선택한 월에 해당하는 행이 없어도 화면에서 안전하게 열을 참조할 수 있도록
+    # 결과표의 스키마를 항상 유지한다.
+    result_df = pd.DataFrame(
+        result_rows,
+        columns=["행", "밴더사", "셀러", "품목", "판매금액", "상태"],
+    )
     unmatched_deals = pd.DataFrame([
         {"셀러": deal.seller, "공구명": deal.item, "판매금액": deal.amount, "주문수": deal.order_count, "확인사항": "당월 캘린더 일정 없음"}
         for deal_index, deal in enumerate(deals) if deal_index not in used
