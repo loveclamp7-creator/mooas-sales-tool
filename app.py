@@ -9,7 +9,7 @@ import streamlit as st
 from matcher import process_files
 
 
-APP_VERSION = "5.1.0"
+APP_VERSION = "5.1.1"
 st.set_page_config(page_title="무아스 공동구매 매출 자동 정리", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
 st.markdown("""
 <style>
@@ -75,9 +75,12 @@ status_text = result_df["상태"].astype(str)
 auto_count = int(status_text.str.contains("자동 입력").sum())
 added_count = int(status_text.str.contains("캘린더 추가").sum())
 excluded_count = int(status_text.str.contains("지정 밴더 공란").sum())
-input_total = int(result_df.loc[status_text.str.contains("자동 입력"), "판매금액"].fillna(0).sum())
+input_total = int(result_df.loc[status_text.str.contains("자동 입력"), "판매금액"].fillna(0).sum()) if not result_df.empty else 0
 
-st.success(f"{target_year}년 {target_month}월 매출 정리가 완료됐습니다.")
+if result_df.empty:
+    st.warning(f"{target_year}년 {target_month}월에 처리할 일정이 없습니다. 위의 매출월이 업로드한 자료와 맞는지 확인해주세요.")
+else:
+    st.success(f"{target_year}년 {target_month}월 매출 정리가 완료됐습니다.")
 metric1, metric2, metric3, metric4 = st.columns(4)
 metric1.metric("판매금액 입력", f"{auto_count:,}건")
 metric2.metric("캘린더 일정 추가", f"{added_count:,}건")
