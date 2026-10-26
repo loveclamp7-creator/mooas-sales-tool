@@ -270,7 +270,7 @@ def add_dataframe_sheet(workbook, name: str, dataframe: pd.DataFrame) -> None:
         ws.column_dimensions[column[0].column_letter].width = min(45, max(12, max(len(clean_text(cell.value)) for cell in column) + 2))
 
 
-def fill_template(template_bytes: bytes, target_month: int, deals: list[DealSales], audit_df: pd.DataFrame, calendar_df: pd.DataFrame):
+def fill_template(template_bytes: bytes, target_month: int, deals: list[DealSales], audit_df: pd.DataFrame, calendar_df: pd.DataFrame, *, intermediate: bool = False, refresh_existing: bool = False):
     workbook = load_workbook(io.BytesIO(template_bytes))
     sheet, header_row, columns = locate_template_sheet(workbook)
     periods = [row_period(sheet, row, columns) for row in range(header_row + 1, sheet.max_row + 1)]
@@ -346,7 +346,7 @@ def fill_template(template_bytes: bytes, target_month: int, deals: list[DealSale
         if clean_key(vendor) in excluded_keys:
             amount_cell.value = None
             status = "지정 밴더 공란 유지"
-        elif amount_cell.value not in (None, ""):
+        elif amount_cell.value not in (None, "") and not (intermediate and refresh_existing):
             status = "기존 금액 유지"
         else:
             sellers = [part.strip() for part in re.split(r"[\r\n,/]+", seller) if part.strip()]
@@ -357,7 +357,14 @@ def fill_template(template_bytes: bytes, target_month: int, deals: list[DealSale
                 seller_score = max((seller_similarity(value, deal.seller) for value in sellers), default=0)
                 item_score = item_similarity(item, deal.item)
                 single_seller_schedule = any(seller_row_counts[clean_key(value)] == 1 for value in sellers)
-                if seller_score >= 0.82 and (item_score >= 0.28 or (single_seller_schedule and deal.amount > 0)):
+                if intermediate:
+                    # Summary exports cannot distinguish repeated schedules.
+                    competing = [r for r in target_rows if r != row_number
+                                 and seller_similarity(sheet.cell(r, columns["셀러"]).value, deal.seller) >= 0.82
+                                 and item_similarity(sheet.cell(r, columns["매칭품목"]).value, deal.item) >= 0.28]
+                    if competing or item_score < 0.28:
+                        continue
+                if seller_score >= 0.82 and (item_score >= 0.28 or (single_seller_schedule and deal.amount > 0 and not intermediate)):
                     candidates.append((seller_score * 0.58 + item_score * 0.42, deal_index, deal))
             if candidates:
                 single_seller_schedule = any(seller_row_counts[clean_key(value)] == 1 for value in sellers)
@@ -384,22 +391,71 @@ def fill_template(template_bytes: bytes, target_month: int, deals: list[DealSale
         columns=["행", "밴더사", "셀러", "품목", "판매금액", "상태"],
     )
     unmatched_deals = pd.DataFrame([
-        {"셀러": deal.seller, "공구명": deal.item, "판매금액": deal.amount, "주문수": deal.order_count, "확인사항": "당월 캘린더 일정 없음"}
+        {"셀러": deal.seller, "공구명": deal.item, "판매금액": deal.amount, "주문수": deal.order_count, "확인사항": "선택 월의 결과 양식에서 매칭되지 않음" if intermediate else "당월 캘린더 일정 없음"}
         for deal_index, deal in enumerate(deals) if deal_index not in used
     ])
     add_dataframe_sheet(workbook, "매칭결과", result_df)
-    add_dataframe_sheet(workbook, "주문번호매칭", audit_df)
+    add_dataframe_sheet(workbook, "상품별정상금액" if intermediate else "주문번호매칭", audit_df)
     add_dataframe_sheet(workbook, "캘린더에없는매출", unmatched_deals)
     output = io.BytesIO(); workbook.save(output)
     return output.getvalue(), result_df, target_year
 
 
-def process_files(source_files: list[tuple[bytes, str]], template_bytes: bytes, template_name: str, target_month: int):
+
+def parse_summary_file(file_bytes: bytes, file_name: str) -> tuple[list[DealSales], pd.DataFrame]:
+    """Product sales export: parent rows only, net amount is authoritative."""
+    for raw in read_excel_sheets(file_bytes, file_name).values():
+        header = find_header(raw, ["상품코드", "상품명", "정상금액"])
+        if header is None:
+            continue
+        df = dataframe_from_raw(raw, header)
+        code_col = find_column(df, ["상품코드"])
+        title_col = find_column(df, ["상품명"])
+        amount_col = find_column(df, ["정상금액"])
+        amounts, counts, seen, audit = defaultdict(int), defaultdict(int), {}, []
+        for _, row in df.iterrows():
+            code, title = clean_text(row[code_col]), clean_text(row[title_col])
+            if not code or not title:
+                continue
+            parsed = parse_deal_title(re.sub(r"옵션별\s*보기\s*$", "", title))
+            number = pd.to_numeric(clean_text(row[amount_col]).replace(",", "").replace("원", ""), errors="coerce")
+            if pd.isna(number):
+                raise ValueError(f"{file_name}: {code} 정상금액이 숫자가 아닙니다.")
+            amount = int(round(number))
+            if code in seen:
+                if seen[code] != (title, amount):
+                    raise ValueError(f"{file_name}: 상품코드 {code}의 중복 행 금액이 다릅니다.")
+                continue
+            seen[code] = (title, amount)
+            order_count = 0
+            try:
+                order_count = int(float(clean_text(row[find_column(df, ["전체 주문건수"])]).replace(",", "") or 0))
+            except (ValueError, TypeError):
+                pass
+            if parsed:
+                amounts[parsed] += amount
+                counts[parsed] += order_count
+            audit.append({"상품코드": code, "상품명": title, "셀러": parsed[0] if parsed else "",
+                          "공구명": parsed[1] if parsed else "", "정상금액": amount,
+                          "상태": "중간매출 정상금액 집계" if parsed else "셀러명 × 상품명 없음 · 확인 필요"})
+        deals = [DealSales(seller, item, amount, counts[(seller, item)], f"{seller} × {item}")
+                 for (seller, item), amount in amounts.items()]
+        return deals, pd.DataFrame(audit)
+    raise ValueError("중간 확인은 상품코드·상품명·정상금액 열이 있는 상품별 매출 요약표 1개를 올려주세요.")
+
+
+def process_files(source_files: list[tuple[bytes, str]], template_bytes: bytes, template_name: str, target_month: int, *, refresh_existing: bool = False):
     if Path(template_name).suffix.lower() != ".xlsx":
         raise ValueError("오른쪽 결과 양식은 서식을 유지하기 위해 XLSX 파일만 사용할 수 있습니다.")
-    order_df, order_deals, calendar_df, recognized = detect_sources(source_files)
-    deals, audit_df = build_deal_sales(order_df, order_deals)
+    intermediate = len(source_files) == 1
+    if intermediate:
+        deals, audit_df = parse_summary_file(*source_files[0])
+        calendar_df = pd.DataFrame({"시작일": pd.Series(dtype="datetime64[ns]")})
+        recognized = [f"{source_files[0][1]}: 중간 확인용 상품별 요약표 · 정상금액 기준"]
+    else:
+        order_df, order_deals, calendar_df, recognized = detect_sources(source_files)
+        deals, audit_df = build_deal_sales(order_df, order_deals)
     if not deals:
-        raise ValueError("주문번호로 연결되는 셀러×무아스 매출이 없습니다.")
-    excel_bytes, result_df, target_year = fill_template(template_bytes, target_month, deals, audit_df, calendar_df)
+        raise ValueError("매칭 가능한 셀러 × 상품 매출이 없습니다.")
+    excel_bytes, result_df, target_year = fill_template(template_bytes, target_month, deals, audit_df, calendar_df, intermediate=intermediate, refresh_existing=refresh_existing)
     return result_df, audit_df, excel_bytes, deals, recognized, target_year
